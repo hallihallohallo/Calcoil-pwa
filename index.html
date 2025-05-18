@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ketogene Rezeptberechnung</title>
+
+  <!-- Manifest & Icons -->
+  <link rel="manifest" href="<?= ScriptApp.getService().getUrl() ?>?manifest=1">
+  <link rel="apple-touch-icon" href="https://raw.githubusercontent.com/hallihallohallo/pwa-icons/main/icon-192x192.png">
+  <meta name="theme-color" content="#ffffff" />
+
+  <!-- TomSelect CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.css" rel="stylesheet" />
+
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; max-width: 600px; }
+    label { display: block; margin-top: 10px; }
+    select, input[type="number"], input[type="text"] { width: 100%; padding: 5px; margin-top: 5px; }
+    button { margin-top: 15px; padding: 10px 20px; }
+    .result { margin-top: 20px; background: #eef; padding: 15px; border-radius: 5px; }
+    .input-row { display: flex; gap: 10px; align-items: center; }
+    .input-row input { flex: 1; }
+    .input-row button { padding: 5px 10px; }
+  </style>
+</head>
+<body>
+
+<h2>Ketogene Rezeptberechnung</h2>
+
+<div>
+  <label for="goalRatio">Ketogenes Ziel-Verhältnis (Fett / (KH + Protein)):</label>
+  <input type="number" id="goalRatio" value="3.0" min="0" step="0.1" />
+</div>
+
+<div>
+  <label for="goalIngredient">Zielzutat zum Ausgleich:</label>
+  <select id="goalIngredient"></select>
+</div>
+
+<hr />
+
+<div id="ingredientsContainer"></div>
+
+<button id="calcBtn">Berechnen</button>
+
+<div class="result" id="result" style="display:none;"></div>
+
+<!-- TomSelect JS -->
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+
+<script>
+  console.log('JS Script geladen, ohne Service Worker Registrierung');
+
+  let ingredientsList = [];
+
+  function createIngredientInput(index) {
+    const container = document.createElement('div');
+    container.style.marginBottom = '15px';
+
+    const labelGrams = document.createElement('label');
+    labelGrams.textContent = `Zutat ${index + 1} - Menge in Gramm:`;
+
+    const inputRow = document.createElement('div');
+    inputRow.className = 'input-row';
+
+    const inputGrams = document.createElement('input');
+    inputGrams.type = 'number';
+    inputGrams.min = '0';
+    inputGrams.id = `grams${index}`;
+    inputGrams.value = '';
+
+    const micButton = document.createElement('button');
+    micButton.textContent = '🎤';
+    micButton.type = 'button';
+    micButton.onclick = () => startSpeechRecognition(inputGrams.id);
+
+    inputRow.appendChild(inputGrams);
+    inputRow.appendChild(micButton);
+
+    const labelIngredient = document.createElement('label');
+    labelIngredient.textContent = `Zutat ${index + 1} - Auswahl:`;
+
+    const selectIngredient = document.createElement('select');
+    selectIngredient.id = `ingredient${index}`;
+
+    container.appendChild(labelGrams);
+    container.appendChild(inputRow);
+    container.appendChild(labelIngredient);
+    container.appendChild(selectIngredient);
+
+    return container;
+  }
+
+  function startSpeechRecognition(inputId) {
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.lang = 'de-DE';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = function(event) {
+      const spokenText = event.results[0][0].transcript;
+      const parsedNumber = parseFloat(spokenText.replace(',', '.'));
+      if (!isNaN(parsedNumber)) {
+        document.getElementById(inputId).value = parsedNumber;
+      } else {
+        alert(`Konnte keine Zahl erkennen: "${spokenText}"`);
+      }
+    };
+
+    recognition.onerror = function(event) {
+      alert('Spracherkennung fehlgeschlagen: ' + event.error);
+    };
+
+    recognition.start();
+  }
+
+  const ingredientsContainer = document.getElementById('ingredientsContainer');
+  for (let i = 0; i < 3; i++) {
+    ingredientsContainer.appendChild(createIngredientInput(i));
+  }
+
+  function initTomSelect(id) {
+    new TomSelect(`#${id}`, {
+      create: false,
+      sortField: { field: "text", direction: "asc" }
+    });
+  }
+
+  function loadIngredients() {
+    google.script.run.withSuccessHandler(data => {
+      ingredientsList = data;
+
+      for (let i = 0; i < 3; i++) {
+        const select = document.getElementById(`ingredient${i}`);
+        select.innerHTML = '<option value="">-- Bitte wählen --</option>';
+        data.forEach(ing => {
+          const option = document.createElement('option');
+          option.value = ing.name;
+          option.textContent = ing.name;
+          select.appendChild(option);
+        });
+        initTomSelect(`ingredient${i}`);
+      }
+
+      const goalSelect = document.getElementById('goalIngredient');
+      goalSelect.innerHTML = '<option value="">-- Bitte wählen --</option>';
+      data.forEach(ing => {
+        const option = document.createElement('option');
+        option.value = ing.name;
+        option.textContent = ing.name;
+        goalSelect.appendChild(option);
+      });
+      initTomSelect('goalIngredient');
+      goalSelect.value = 'MCT-Öl';
+    }).getIngredients();
+  }
+
+  loadIngredients();
+
+  document.getElementById('calcBtn').addEventListener('click', () => {
+    const goalRatio = parseFloat(document.getElementById('goalRatio').value);
+    const goalIngredient = document.getElementById('goalIngredient').value;
+
+    let ingredients = [];
+    for (let i = 0; i < 3; i++) {
+      const name = document.getElementById(`ingredient${i}`).value;
+      const grams = parseFloat(document.getElementById(`grams${i}`).value);
+      if (name && !isNaN(grams) && grams > 0) {
+        ingredients.push({ name, grams });
+      }
+    }
+
+    if (ingredients.length === 0) {
+      alert('Bitte mindestens eine Zutat mit Menge eingeben.');
+      return;
+    }
+    if (!goalIngredient) {
+      alert('Bitte Zielzutat auswählen.');
+      return;
+    }
+    if (isNaN(goalRatio) || goalRatio <= 0) {
+      alert('Bitte gültiges Ziel-Ketogenes Verhältnis eingeben.');
+      return;
+    }
+
+    google.script.run.withSuccessHandler(result => {
+      if (result.error) {
+        alert(result.error);
+        return;
+      }
+      const resDiv = document.getElementById('result');
+      resDiv.style.display = 'block';
+      resDiv.innerHTML = `
+        <b>Gesamte Kohlenhydrate:</b> ${result.totalCarbs} g<br>
+        <b>Gesamt Protein:</b> ${result.totalProtein} g<br>
+        <b>Gesamt Fett:</b> ${result.totalFat} g<br>
+        <b>Benötigte Menge ${result.goalIngredient}:</b> ${result.neededGoalGrams} g
+      `;
+    }).calculate({
+      ingredients: ingredients,
+      goalRatio: goalRatio,
+      goalIngredient: goalIngredient
+    });
+  });
+</script>
+
+</body>
+</html>
